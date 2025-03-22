@@ -5,6 +5,7 @@ import requests
 import re
 from flask import Flask, request, render_template_string, jsonify
 import random
+import jieba
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -215,21 +216,30 @@ def text_to_base36(text):
     if not text:
         return 0
     
-    # 檢查是否為純數字
+    # 1. 檢查是否為純數字
     if text.isdigit():
         return int(text)
     
-    # 含有字母，視為36進位
+    # 2. 檢查是否只包含英文字母和數字
+    if all(c.isalnum() and ord(c) < 128 for c in text):
+        # 含有英文字母，視為36進位
+        result = 0
+        for char in text.upper():
+            if '0' <= char <= '9':
+                value = int(char)
+            elif 'A' <= char <= 'Z':
+                value = ord(char) - ord('A') + 10
+            else:
+                # 忽略不在36進位範圍內的字符
+                continue
+            result = result * 36 + value
+        return result
+    
+    # 3. 包含其他Unicode字符，使用簡化的哈希方法
+    # 使用簡單的哈希算法，避免超大數字
     result = 0
-    for char in text.upper():
-        if '0' <= char <= '9':
-            value = int(char)
-        elif 'A' <= char <= 'Z':
-            value = ord(char) - ord('A') + 10
-        else:
-            # 忽略不在36進位範圍內的字符
-            continue
-        result = result * 36 + value
+    for char in text:
+        result = (result * 31 + ord(char)) % (10**15)
     
     return result
 
@@ -238,46 +248,161 @@ def base36_to_text(number, original_text):
     if not original_text:
         return str(number)
     
-    # 檢查原始文字是否為純數字
+    # 1. 檢查原始文字是否為純數字
     if original_text.isdigit():
         return str(number)
     
-    # 含有字母，需要轉換回36進位表示
-    result = ""
-    temp = number
-    
-    # 獲取原始文字的長度（忽略非36進位字符）
-    valid_chars = 0
-    for char in original_text:
-        if ('0' <= char <= '9') or ('A' <= char <= 'Z') or ('a' <= char <= 'z'):
-            valid_chars += 1
-    
-    # 如果沒有有效字符，直接返回數字
-    if valid_chars == 0:
-        return str(number)
-    
-    # 轉換為36進位
-    while temp > 0 or len(result) < valid_chars:
-        digit = temp % 36
-        if digit < 10:
-            result = str(digit) + result
-        else:
-            result = chr(digit - 10 + ord('A')) + result
-        temp //= 36
+    # 2. 檢查是否只包含英文字母和數字
+    if all(c.isalnum() and ord(c) < 128 for c in original_text):
+        # 含有英文字母，需要轉換回36進位表示
+        result = ""
+        temp = number
         
-        if len(result) >= valid_chars:
-            break
+        # 獲取原始文字的長度（忽略非36進位字符）
+        valid_chars = 0
+        for char in original_text:
+            if ('0' <= char <= '9') or ('A' <= char <= 'Z') or ('a' <= char <= 'z'):
+                valid_chars += 1
+        
+        # 如果沒有有效字符，直接返回數字
+        if valid_chars == 0:
+            return str(number)
+        
+        # 轉換為36進位
+        while temp > 0 or len(result) < valid_chars:
+            digit = temp % 36
+            if digit < 10:
+                result = str(digit) + result
+            else:
+                result = chr(digit - 10 + ord('A')) + result
+            temp //= 36
+            
+            if len(result) >= valid_chars:
+                break
+        
+        # 如果結果長度不足，前面補0
+        while len(result) < valid_chars:
+            result = '0' + result
+        
+        return result
     
-    # 如果結果長度不足，前面補0
-    while len(result) < valid_chars:
-        result = '0' + result
+    # 3. 包含Unicode字符，生成有趣的替換
+    # 對於Unicode文字，生成一個相似但不同的Unicode字符
+    result = ""
+    for char in original_text:
+        # 獲取字符的Unicode碼點
+        code_point = ord(char)
+        
+        # 根據數字生成一個小偏移，使字符略有變化但仍保持在同一Unicode區塊
+        # 對於中文字符，保持在中文區塊內
+        if 0x4E00 <= code_point <= 0x9FFF:  # 中文字符範圍
+            # 計算一個偏移，保持在中文範圍內
+            offset = (number % 100) - 50  # -50 到 49 的偏移
+            new_code = code_point + offset
+            # 確保仍在中文範圍內
+            if new_code < 0x4E00:
+                new_code = 0x4E00 + (new_code % 100)
+            elif new_code > 0x9FFF:
+                new_code = 0x9FFF - (new_code % 100)
+        else:
+            # 對於其他Unicode字符，使用較小的偏移
+            offset = (number % 20) - 10  # -10 到 9 的偏移
+            new_code = code_point + offset
+        
+        # 將新的碼點轉換為字符
+        try:
+            result += chr(new_code)
+        except:
+            # 如果轉換失敗，使用原始字符
+            result += char
     
     return result
 
-def parse_text(text):
-    """解析文本，將其分割為單詞，並轉換為數字"""
-    # 使用正則表達式分割文本
-    words = re.findall(r'\b\w+\b', text)
+def find_prime_replacements(words, count=5):
+    """為每個單詞找到最接近的質數替換"""
+    result = []
+    
+    for word in words:
+        original = word['original']
+        numeric = word['numeric']
+        is_prime = word['is_prime']
+        
+        # 如果數字本身是質數，不需要替換
+        if is_prime:
+            result.append({
+                'original': original,
+                'numeric': numeric,
+                'is_prime': True,
+                'replacements': []
+            })
+            continue
+        
+        # 查找最接近的質數
+        closest_primes = find_closest_primes(numeric, count)
+        
+        # 將質數轉換回文字
+        replacements = []
+        for prime_info in closest_primes:
+            prime = prime_info['prime']
+            distance = prime_info['distance']
+            direction = '+' if prime > numeric else '-'
+            
+            # 將質數轉換為文字
+            text = base36_to_text(prime, original)
+            
+            replacements.append({
+                'prime': prime,
+                'text': text,
+                'distance': distance,
+                'direction': direction
+            })
+        
+        result.append({
+            'original': original,
+            'numeric': numeric,
+            'is_prime': False,
+            'replacements': replacements
+        })
+    
+    return result
+
+def parse_text(text, chinese_mode="auto"):
+    """
+    解析文本，將其分割為單詞，並轉換為數字
+    
+    chinese_mode 參數控制中文處理方式:
+    - "auto": 自動使用jieba進行詞彙分割
+    - "char": 將每個中文字符視為獨立單元
+    - "space": 使用空格作為分隔符，由用戶手動分詞
+    """
+    # 檢查文本是否包含中文字符
+    has_chinese = any(0x4E00 <= ord(c) <= 0x9FFF for c in text)
+    
+    if has_chinese:
+        if chinese_mode == "char":
+            # 按字符處理中文
+            chinese_chars = [c for c in text if 0x4E00 <= ord(c) <= 0x9FFF]
+            
+            # 提取非中文部分（按空格分割）
+            non_chinese = []
+            for part in text.split():
+                if not any(0x4E00 <= ord(c) <= 0x9FFF for c in part):
+                    non_chinese.append(part)
+            
+            # 合併所有單元
+            words = chinese_chars + non_chinese
+        
+        elif chinese_mode == "space":
+            # 使用空格作為分隔符，由用戶手動分詞
+            words = [word for word in text.split() if word]
+        
+        else:  # "auto" 模式，使用jieba分詞
+            # 使用jieba進行中文分詞
+            seg_list = jieba.cut(text, cut_all=False)
+            words = [word for word in seg_list if word.strip()]
+    else:
+        # 對於非中文文本，按空格分割
+        words = [word for word in text.split() if word]
     
     # 轉換每個單詞為數字
     result = []
@@ -287,36 +412,6 @@ def parse_text(text):
             'original': word,
             'numeric': num_value,
             'is_prime': is_prime_primesdb(num_value)
-        })
-    
-    return result
-
-def find_prime_replacements(words, count=5):
-    """為每個單詞找到最接近的質數替換"""
-    result = []
-    
-    for word in words:
-        number = word['numeric']
-        closest_primes = find_closest_primes(number, count)
-        
-        prime_replacements = []
-        for prime_info in closest_primes:
-            prime_num = prime_info['prime']
-            distance = prime_info['distance']
-            prime_text = base36_to_text(prime_num, word['original'])
-            
-            prime_replacements.append({
-                'prime': prime_num,
-                'text': prime_text,
-                'distance': distance,
-                'direction': '+' if prime_num > number else '-'
-            })
-        
-        result.append({
-            'original': word['original'],
-            'numeric': number,
-            'is_prime': word['is_prime'],
-            'replacements': prime_replacements
         })
     
     return result
@@ -368,14 +463,13 @@ def generate_random_combinations(words, max_combinations=5):
 
 @app.route('/')
 def index():
-    """首頁"""
     return render_template_string(get_index_template())
 
 @app.route('/search', methods=['POST'])
 def search():
-    """搜索文字與質數的距離"""
     try:
         text = request.form.get('text', '')
+        chinese_mode = request.form.get('chinese_mode', 'auto')
         count = int(request.form.get('count', '10'))
         
         # 限制結果數量在 1-512 之間
@@ -385,7 +479,7 @@ def search():
             return jsonify({'error': '請輸入文字'}), 400
         
         # 解析文本
-        parsed_words = parse_text(text)
+        parsed_words = parse_text(text, chinese_mode)
         
         # 查找質數替換
         prime_replacements = find_prime_replacements(parsed_words, count)
@@ -633,10 +727,15 @@ def get_index_template():
                     <label for="text_input">請輸入文字：</label>
                     <textarea id="text_input" placeholder="例如：Hello World 或 I am a 60 years old man."></textarea>
                 </div>
-            </div>
-            
-            <div class="form-container">
-                <div class="form-group count-group">
+                <div class="form-group">
+                    <label for="chinese_mode">中文處理模式：</label>
+                    <select id="chinese_mode">
+                        <option value="auto">自動（使用jieba）</option>
+                        <option value="char">按字符處理</option>
+                        <option value="space">按空格分隔</option>
+                    </select>
+                </div>
+                <div class="count-group">
                     <label for="result_count">結果數量：</label>
                     <input type="number" id="result_count" value="10" min="1" max="512">
                 </div>
@@ -686,6 +785,7 @@ def get_index_template():
             document.addEventListener('DOMContentLoaded', function() {
                 const searchBtn = document.getElementById('search_btn');
                 const textInput = document.getElementById('text_input');
+                const chineseModeSelect = document.getElementById('chinese_mode');
                 const resultCountInput = document.getElementById('result_count');
                 const resultsDiv = document.getElementById('results');
                 const textDisplay = document.getElementById('text_display');
@@ -712,6 +812,7 @@ def get_index_template():
                 
                 searchBtn.addEventListener('click', function() {
                     const text = textInput.value.trim();
+                    const chineseMode = chineseModeSelect.value;
                     const count = parseInt(resultCountInput.value) || 10;
                     
                     // 限制結果數量在 1-512 之間
@@ -730,6 +831,7 @@ def get_index_template():
                     // 創建 FormData
                     const formData = new FormData();
                     formData.append('text', text);
+                    formData.append('chinese_mode', chineseMode);
                     formData.append('count', limitedCount);
                     
                     // 發送請求
