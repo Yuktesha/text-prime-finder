@@ -465,61 +465,58 @@ def generate_random_combinations(words, max_combinations=5):
 def index():
     return render_template_string(get_index_template())
 
-@app.route('/search', methods=['POST'])
+@app.route('/analyze', methods=['POST'])
 def search():
     try:
-        text = request.form.get('text', '')
-        chinese_mode = request.form.get('chinese_mode', 'auto')
-        count = int(request.form.get('count', '10'))
+        data = request.json
+        text = data.get('text', '')
+        chinese_mode = data.get('chinese_mode', 'auto')
         
-        # 限制結果數量在 1-512 之間
-        count = max(1, min(512, count))
+        if not text:
+            return jsonify({"error": "請提供文字"}), 400
         
-        if not text.strip():
-            return jsonify({'error': '請輸入文字'}), 400
-        
-        # 解析文本
+        # 解析文字
         parsed_words = parse_text(text, chinese_mode)
         
-        # 查找質數替換
-        prime_replacements = find_prime_replacements(parsed_words, count)
+        # 計算每個單詞的數值並檢查是否為質數
+        word_analysis = []
+        numeric_values = []
         
-        # 生成隨機組合
-        combinations = generate_random_combinations(prime_replacements, 5)
-        
-        # 準備數值表示
-        numeric_representation = []
         for word in parsed_words:
-            numeric_representation.append(str(word['numeric']))
-        
-        # 準備質數替換表示
-        prime_representation = []
-        for word in prime_replacements:
-            if word['is_prime']:
-                prime_representation.append(f"{word['original']}")
-            elif word['replacements']:
-                replacement = word['replacements'][0]
-                prime_representation.append(f"{replacement['text']}{replacement['direction']}{replacement['distance']}")
-            else:
-                prime_representation.append(word['original'])
+            numeric_value = word['numeric']
+            numeric_values.append(str(numeric_value))
+            
+            is_prime = word['is_prime']
+            closest_prime = None
+            distance = None
+            
+            if not is_prime:
+                closest_primes = find_closest_primes(numeric_value, 1)
+                if closest_primes and len(closest_primes) > 0:
+                    closest_prime = closest_primes[0]['prime']
+                    distance = closest_primes[0]['distance']
+            
+            word_analysis.append({
+                "word": word['original'],
+                "numeric_value": numeric_value,
+                "is_prime": is_prime,
+                "closest_prime": closest_prime,
+                "distance": distance
+            })
         
         return jsonify({
-            'original_text': text,
-            'parsed_words': parsed_words,
-            'prime_replacements': prime_replacements,
-            'numeric_representation': ' '.join(numeric_representation),
-            'prime_representation': ' '.join(prime_representation),
-            'combinations': combinations,
-            'count': count
+            "original_text": text,
+            "numeric_values": numeric_values,
+            "word_analysis": word_analysis
         })
-    
+        
     except Exception as e:
-        logger.error(f"處理請求時出錯: {e}")
-        return jsonify({'error': f'處理請求時出錯: {str(e)}'}), 500
+        logger.error(f"處理請求時發生錯誤: {str(e)}")
+        return jsonify({"error": f"處理請求時發生錯誤: {str(e)}"}), 500
 
 def get_index_template():
     """獲取首頁模板"""
-    return '''
+    return """
     <!DOCTYPE html>
     <html lang="zh-TW">
     <head>
@@ -527,427 +524,829 @@ def get_index_template():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>文字與質數的距離</title>
         <style>
+            :root {
+                --primary-color: #3b5998;
+                --secondary-color: #2c4a7c;
+                --accent-color: #4CAF50;
+                --error-color: #f44336;
+                --border-radius: 8px;
+                --box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+                --transition: all 0.3s ease;
+            }
+            
             body {
-                font-family: 'Arial', sans-serif;
+                font-family: 'Helvetica Neue', Arial, sans-serif;
                 line-height: 1.6;
                 color: #333;
-                max-width: 800px;
-                margin: 0 auto;
-                padding: 20px;
                 background-color: #f5f5f5;
+                margin: 0;
+                padding: 20px;
+                max-width: 1200px;
+                margin: 0 auto;
             }
-            h1 {
-                color: #2c3e50;
+            
+            /* 標題樣式 */
+            .header {
                 text-align: center;
                 margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 1px solid #eee;
             }
-            .container {
-                background-color: white;
-                border-radius: 8px;
-                padding: 20px;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            }
-            .form-container {
+            
+            .app-title {
                 display: flex;
-                align-items: flex-end;
-                gap: 15px;
+                align-items: center;
+                justify-content: center;
+                margin-bottom: 10px;
+                font-size: 2rem;
+                color: var(--primary-color);
+            }
+            
+            .app-icon {
+                margin-right: 10px;
+                font-size: 2rem;
+            }
+            
+            .app-description {
+                color: #666;
                 margin-bottom: 20px;
             }
+            
+            /* 主要內容區域 */
+            .main-content {
+                margin-top: 20px;
+            }
+            
+            /* 卡片樣式 */
+            .input-section, .result-section {
+                background-color: white;
+                border-radius: var(--border-radius);
+                box-shadow: var(--box-shadow);
+                padding: 20px;
+                margin-bottom: 20px;
+                display: flex;
+                flex-direction: column;
+            }
+            
+            /* 表單樣式 */
             .form-group {
-                flex: 1;
+                margin-bottom: 0;
             }
-            .count-group {
-                width: 100px;
-                flex: none;
-            }
+            
             label {
                 display: block;
                 margin-bottom: 5px;
                 font-weight: bold;
+                color: #555;
             }
-            input[type="text"], input[type="number"], textarea {
+            
+            input, select, textarea {
                 width: 100%;
-                padding: 8px;
+                padding: 10px;
                 border: 1px solid #ddd;
-                border-radius: 4px;
+                border-radius: var(--border-radius);
                 font-size: 16px;
+                transition: var(--transition);
                 box-sizing: border-box;
+                background-color: #fff;
             }
-            textarea {
-                height: 100px;
-                resize: vertical;
+            
+            input:focus, select:focus, textarea:focus {
+                outline: none;
+                border-color: var(--primary-color);
+                box-shadow: 0 0 0 2px rgba(59, 89, 152, 0.2);
             }
-            button {
-                background-color: #3498db;
+            
+            /* 修復輸入框紅色邊框問題 */
+            input[type="text"] {
+                border: 1px solid #ddd;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+            }
+            
+            input[type="text"]:focus {
+                border-color: var(--primary-color);
+                box-shadow: 0 0 0 2px rgba(59, 89, 152, 0.2);
+            }
+            
+            input[type="text"]::placeholder {
+                color: #aaa;
+                opacity: 0.7;
+            }
+            
+            /* 表單佈局 */
+            .form-layout {
+                display: flex;
+                flex-direction: column;
+                gap: 15px;
+                flex: 1;
+            }
+            
+            /* 按鈕組緊接在表單元素後 */
+            .button-group {
+                margin-top: 15px;
+            }
+            
+            /* 移動設備優化 */
+            @media (max-width: 768px) {
+                input[type="text"], select {
+                    font-size: 16px; /* 防止iOS縮放 */
+                    padding: 12px;
+                }
+                
+                .btn {
+                    padding: 12px 20px;
+                    width: 100%;
+                    margin-right: 0;
+                    margin-bottom: 10px;
+                }
+                
+                .button-group {
+                    flex-direction: column;
+                }
+            }
+            
+            /* 按鈕樣式 */
+            .btn {
+                display: inline-block;
+                padding: 10px 20px;
+                background-color: var(--primary-color);
                 color: white;
                 border: none;
-                padding: 8px 15px;
-                border-radius: 4px;
+                border-radius: var(--border-radius);
                 cursor: pointer;
                 font-size: 16px;
-                transition: background-color 0.3s;
-                height: 38px;
-            }
-            button:hover {
-                background-color: #2980b9;
-            }
-            #results {
-                margin-top: 30px;
-                display: none;
-            }
-            .result-header {
-                margin-bottom: 15px;
-                padding-bottom: 10px;
-                border-bottom: 1px solid #eee;
-            }
-            .result-section {
-                margin-bottom: 20px;
-                padding: 15px;
-                background-color: #f9f9f9;
-                border-radius: 4px;
-            }
-            .word-item {
-                display: flex;
-                justify-content: space-between;
-                padding: 8px 0;
-                border-bottom: 1px solid #eee;
-            }
-            .word-item:last-child {
-                border-bottom: none;
-            }
-            .word-info {
-                margin-bottom: 10px;
-                padding: 10px;
-                background-color: #f5f5f5;
-                border-radius: 4px;
-                color: #333;
-            }
-            .word-info:nth-child(odd) {
-                background-color: #f5f5f5;
-            }
-            .word-info:nth-child(even) {
-                background-color: #e9e9e9;
-            }
-            .word-info.is-prime {
-                border-left: 4px solid #4caf50;
-            }
-            .word-info.not-prime {
-                border-left: 4px solid #f44336;
-            }
-            .prime-list {
-                margin-top: 10px;
-            }
-            .prime-item {
-                display: flex;
-                justify-content: space-between;
-                padding: 5px 0;
-                border-bottom: 1px dashed #eee;
-            }
-            .prime-item:last-child {
-                border-bottom: none;
-            }
-            .combination {
-                margin-bottom: 15px;
-                padding: 10px;
-                background-color: #e3f2fd;
-                border-radius: 4px;
-                border: 1px solid #bbdefb;
-            }
-            .loading {
+                transition: var(--transition);
+                margin-right: 10px;
                 text-align: center;
-                margin: 20px 0;
-                display: none;
             }
-            .error {
-                color: #721c24;
-                background-color: #f8d7da;
-                border: 1px solid #f5c6cb;
-                padding: 10px;
-                border-radius: 4px;
+            
+            .btn:hover {
+                background-color: var(--secondary-color);
+                transform: translateY(-1px);
+            }
+            
+            /* 按鈕組樣式 */
+            .button-group {
+                display: flex;
+                gap: 10px;
                 margin-top: 20px;
-                display: none;
             }
+            
+            .btn-primary {
+                background-color: var(--primary-color);
+            }
+            
+            .btn-primary:hover {
+                background-color: var(--secondary-color);
+            }
+            
+            .btn-secondary {
+                background-color: #6c757d;
+            }
+            
+            .btn-secondary:hover {
+                background-color: #5a6268;
+            }
+            
+            /* 移動設備優化 */
+            @media (max-width: 768px) {
+                body {
+                    padding: 15px;
+                }
+                
+                .header {
+                    margin-bottom: 20px;
+                }
+                
+                input[type="text"], select, .text-input, .select-input {
+                    font-size: 16px; /* 防止iOS縮放 */
+                    padding: 12px;
+                }
+                
+                .btn {
+                    padding: 12px 20px;
+                    width: 100%;
+                    margin-right: 0;
+                    margin-bottom: 10px;
+                }
+                
+                .button-group {
+                    flex-direction: column;
+                }
+                
+                .copy-message {
+                    display: block;
+                    margin-left: 0;
+                    margin-top: 5px;
+                }
+            }
+            
+            /* 結果樣式 */
+            .result-card {
+                background-color: white;
+                border-radius: var(--border-radius);
+                padding: 20px;
+                margin-bottom: 20px;
+                box-shadow: var(--box-shadow);
+            }
+            
+            .result-card h3 {
+                color: var(--primary-color);
+                margin-top: 0;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+            }
+            
+            .word-info {
+                background-color: #f9f9f9;
+                border-radius: var(--border-radius);
+                padding: 15px;
+                margin-bottom: 15px;
+                transition: var(--transition);
+            }
+            
+            .word-info:hover {
+                box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+            }
+            
+            .word-info h4 {
+                margin-top: 0;
+                color: var(--dark-color);
+            }
+            
+            .is-prime {
+                background-color: rgba(40, 167, 69, 0.1);
+                border-left: 4px solid var(--success-color);
+            }
+            
+            .prime-item {
+                color: var(--success-color);
+                font-weight: 600;
+            }
+            
             .celebration {
-                text-align: center;
-                font-size: 24px;
+                background-color: #f8f9d7;
+                border-radius: var(--border-radius);
+                padding: 20px;
                 margin: 20px 0;
-                animation: celebrate 1s infinite;
+                text-align: center;
+                border: 2px dashed var(--success-color);
+                animation: pulse 2s infinite;
                 display: none;
             }
-            @keyframes celebrate {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.2); }
-                100% { transform: scale(1); }
+            
+            .celebration h3 {
+                color: var(--success-color);
+                margin-top: 0;
             }
+            
+            .copy-message {
+                display: none;
+                color: var(--success-color);
+                font-size: 14px;
+                margin-left: 10px;
+                animation: fadeOut 2s forwards;
+                animation-delay: 1s;
+            }
+            
+            .action-buttons {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 20px;
+            }
+            
+            @keyframes pulse {
+                0% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.4); }
+                70% { box-shadow: 0 0 0 10px rgba(40, 167, 69, 0); }
+                100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0); }
+            }
+            
+            @keyframes fadeOut {
+                from { opacity: 1; }
+                to { opacity: 0; }
+            }
+            
+            /* 響應式設計 */
+            @media (max-width: 768px) {
+                .input-section, .result-section {
+                    flex: 1 1 100%;
+                }
+                
+                .btn {
+                    width: 100%;
+                    margin-right: 0;
+                }
+                
+                .action-buttons {
+                    flex-direction: column;
+                }
+                
+                .copy-message {
+                    display: block;
+                    margin-left: 0;
+                    margin-top: 5px;
+                }
+            }
+            
+            /* 寬螢幕版兩列式設計 */
+            @media (min-width: 992px) {
+                .main-content {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 30px;
+                    align-items: stretch;
+                }
+                
+                .input-section, .result-section {
+                    width: 100%;
+                    margin: 0;
+                    height: auto;
+                    min-height: 400px;
+                    display: flex;
+                    flex-direction: column;
+                }
+                
+                .result-section {
+                    max-height: 90vh;
+                    overflow-y: auto;
+                    padding-bottom: 30px;
+                }
+                
+                .form-layout {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 20px;
+                    flex: 1;
+                }
+                
+                .button-group {
+                    margin-top: auto;
+                    padding-top: 20px;
+                }
+                
+                /* 確保結果區域在無內容時也有高度 */
+                #result {
+                    min-height: 200px;
+                }
+                
+                .result-placeholder {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    text-align: center;
+                    padding: 20px;
+                    background-color: #f9f9f9;
+                    border-radius: var(--border-radius);
+                    border: 2px dashed #ddd;
+                    margin-bottom: 20px;
+                    min-height: 200px;
+                }
+                
+                .result-placeholder h3 {
+                    color: var(--primary-color);
+                    margin-bottom: 15px;
+                    font-size: 1.5rem;
+                }
+                
+                .result-placeholder p {
+                    color: #777;
+                    font-size: 1.1rem;
+                    max-width: 80%;
+                    line-height: 1.5;
+                }
+                
+                .result-placeholder::before {
+                    content: "📊";
+                    font-size: 3rem;
+                    margin-bottom: 20px;
+                    opacity: 0.7;
+                }
+            }
+            
+            .result-placeholder {
+                text-align: center;
+                padding: 20px;
+                background-color: #f9f9f9;
+                border-radius: var(--border-radius);
+                border: 2px dashed #ddd;
+                margin-bottom: 20px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 200px;
+                flex: 1;
+            }
+            
+            .result-placeholder h3 {
+                color: var(--primary-color);
+                margin-bottom: 15px;
+                font-size: 1.5rem;
+            }
+            
+            .result-placeholder p {
+                color: #777;
+                font-size: 1.1rem;
+                max-width: 80%;
+                line-height: 1.5;
+            }
+            
+            .result-placeholder::before {
+                content: "📊";
+                font-size: 3rem;
+                margin-bottom: 20px;
+                opacity: 0.7;
+            }
+            
+            /* 工具提示樣式 */
+            .tooltip-icon {
+                display: inline-block;
+                width: 16px;
+                height: 16px;
+                background-color: var(--primary-color);
+                color: white;
+                border-radius: 50%;
+                text-align: center;
+                line-height: 16px;
+                font-size: 12px;
+                cursor: help;
+                margin-left: 5px;
+                font-style: normal;
+                position: relative;
+            }
+            
+            .tooltip-icon:hover::after {
+                content: attr(title);
+                position: absolute;
+                left: 50%;
+                transform: translateX(-50%);
+                bottom: 100%;
+                background-color: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 5px 10px;
+                border-radius: 4px;
+                font-size: 12px;
+                white-space: nowrap;
+                z-index: 10;
+                margin-bottom: 5px;
+                width: max-content;
+                max-width: 300px;
+            }
+            
+            /* 修復輸入框樣式 */
+            .text-input {
+                border: 1px solid #ddd !important;
+                outline: none !important;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+                -webkit-appearance: none !important;
+                -moz-appearance: none !important;
+                appearance: none !important;
+                border-radius: var(--border-radius) !important;
+                background-color: #fff !important;
+            }
+            
+            .text-input:focus {
+                border-color: var(--primary-color) !important;
+                box-shadow: 0 0 0 2px rgba(59, 89, 152, 0.2) !important;
+            }
+            
+            .text-input::placeholder {
+                color: #aaa !important;
+                opacity: 0.7 !important;
+            }
+            
+            /* 修復下拉選單樣式 */
+            .select-input {
+                border: 1px solid #ddd !important;
+                outline: none !important;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+                -webkit-appearance: none !important;
+                -moz-appearance: none !important;
+                appearance: none !important;
+                border-radius: var(--border-radius) !important;
+                background-color: #fff !important;
+                background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23333' d='M6 8.825L1.175 4 2.05 3.125 6 7.075 9.95 3.125 10.825 4z'/%3E%3C/svg%3E");
+                background-repeat: no-repeat !important;
+                background-position: right 10px center !important;
+                padding-right: 30px !important;
+            }
+            
+            .select-input:focus {
+                border-color: var(--primary-color) !important;
+                box-shadow: 0 0 0 2px rgba(59, 89, 152, 0.2) !important;
+            }
+            
+            /* 文本區域樣式 */
+            textarea.text-input {
+                resize: vertical;
+                min-height: 100px;
+                flex: 1;
+                margin-bottom: 15px;
+                border: 1px solid #ddd !important;
+                outline: none !important;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+                -webkit-appearance: none !important;
+                -moz-appearance: none !important;
+                appearance: none !important;
+                border-radius: var(--border-radius) !important;
+                background-color: #fff !important;
+                font-family: inherit;
+                line-height: 1.5;
+            }
+            
+            textarea.text-input:focus {
+                border-color: var(--primary-color) !important;
+                box-shadow: 0 0 0 2px rgba(59, 89, 152, 0.2) !important;
+            }
+            
             .footer {
                 text-align: center;
-                margin-top: 20px;
+                padding: 20px;
+                margin-top: 40px;
+                color: #666;
                 font-size: 14px;
-                color: #777;
-                padding-top: 10px;
                 border-top: 1px solid #eee;
             }
+            
             .footer a {
-                color: #3498db;
+                color: var(--primary-color);
                 text-decoration: none;
             }
+            
             .footer a:hover {
                 text-decoration: underline;
-            }
-            .highlight {
-                font-weight: bold;
-                color: #e74c3c;
-            }
-            .numeric-display {
-                font-family: monospace;
-                white-space: pre-wrap;
-                word-break: break-all;
-                background-color: #f0f0f0;
-                padding: 10px;
-                border-radius: 4px;
-                margin: 10px 0;
-            }
-            .prime-text {
-                font-weight: bold;
-                color: #2980b9;
-            }
-            .distance-indicator {
-                font-size: 0.85em;
-                color: #e74c3c;
-                margin-left: 2px;
             }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>文字與質數的距離</h1>
+            <header class="header">
+                <h1>🔢 文字與質數的距離 🧮</h1>
+                <p>輸入文字，計算其數值並找出最接近的質數</p>
+            </header>
             
-            <div class="form-container">
-                <div class="form-group">
-                    <label for="text_input">請輸入文字：</label>
-                    <textarea id="text_input" placeholder="例如：Hello World 或 I am a 60 years old man."></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="chinese_mode">中文處理模式：</label>
-                    <select id="chinese_mode">
-                        <option value="auto">自動（使用jieba）</option>
-                        <option value="char">按字符處理</option>
-                        <option value="space">按空格分隔</option>
-                    </select>
-                </div>
-                <div class="count-group">
-                    <label for="result_count">結果數量：</label>
-                    <input type="number" id="result_count" value="10" min="1" max="512">
-                </div>
+            <div class="main-content">
+                <section class="input-section">
+                    <form id="text_form" class="form-layout">
+                        <div class="form-group">
+                            <label for="text">輸入文字：</label>
+                            <textarea id="text" name="text" placeholder="例如：Hello 或 你好" class="text-input" required></textarea>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="chinese_mode">中文處理模式：
+                                <span class="tooltip-icon" title="自動：使用jieba智能識別中文詞彙；按字符：將每個中文字符視為獨立單元；按空格：使用空格作為分隔符">ⓘ</span>
+                            </label>
+                            <select id="chinese_mode" name="chinese_mode" class="select-input">
+                                <option value="auto">自動（使用jieba）</option>
+                                <option value="char">按字符處理</option>
+                                <option value="space">按空格分隔</option>
+                            </select>
+                        </div>
+                        
+                        <div class="button-group">
+                            <button type="submit" class="btn btn-primary">計算</button>
+                            <button type="button" id="clear_btn" class="btn btn-secondary">清除</button>
+                        </div>
+                    </form>
+                </section>
                 
-                <button id="search_btn">查詢</button>
+                <section class="result-section">
+                    <div class="result-placeholder" id="result_placeholder">
+                        <h3>計算結果將顯示在這裡</h3>
+                        <p>請在左側輸入文字並點擊「計算」按鈕</p>
+                    </div>
+                    <div id="result" style="display: none;">
+                        <div class="result-card">
+                            <h3>計算結果</h3>
+                            <div id="prime_result"></div>
+                            <div class="action-buttons">
+                                <button id="copy_prime_btn" class="btn btn-copy">複製數值</button>
+                                <button id="copy_analysis_btn" class="btn btn-copy">複製分析結果</button>
+                                <button id="export_csv_btn" class="btn btn-copy">導出為CSV</button>
+                                <span class="copy-message">已複製！</span>
+                            </div>
+                        </div>
+                        
+                        <div id="celebration" class="celebration">
+                            <h3>🎉 恭喜！你找到了質數！🎉</h3>
+                            <p>你輸入的文字包含質數，這是質人精神的體現！</p>
+                        </div>
+                        
+                        <div class="result-card">
+                            <h3>單詞分析</h3>
+                            <div id="word_analysis"></div>
+                        </div>
+                    </div>
+                </section>
             </div>
             
-            <div class="loading" id="loading">
-                <p>正在查詢中，請稍候...</p>
-            </div>
-            
-            <div class="error" id="error"></div>
-            
-            <div id="results">
-                <div class="result-header">
-                    <h2>查詢結果</h2>
-                    <p id="text_display"></p>
-                </div>
-                
-                <div class="result-section">
-                    <h3>數值表示</h3>
-                    <div id="numeric_display" class="numeric-display"></div>
-                </div>
-                
-                <div class="result-section">
-                    <h3>質數替換</h3>
-                    <div id="prime_display" class="combination"></div>
-                </div>
-                
-                <div class="result-section">
-                    <h3>單詞分析</h3>
-                    <div id="word_analysis"></div>
-                </div>
-                
-                <div class="result-section">
-                    <h3>隨機質數組合</h3>
-                    <div id="combinations"></div>
-                </div>
-            </div>
-            
-            <div class="footer">
-                <p> 2025 質人精神：文字與質數的距離 | 基於<a href="https://github.com/pekesoft/PrimesDB" target="_blank">PrimesDB</a>高效質數資料庫的應用</p>
-            </div>
+            <footer class="footer">
+                <p>© 2025 質人精神：文字與質數的距離 | 基於<a href="https://github.com/pekesoft/PrimesDB" target="_blank">PrimesDB</a>高效質數資料庫的應用</p>
+            </footer>
         </div>
         
         <script>
             document.addEventListener('DOMContentLoaded', function() {
-                const searchBtn = document.getElementById('search_btn');
-                const textInput = document.getElementById('text_input');
+                const form = document.getElementById('text_form');
+                const textInput = document.getElementById('text');
                 const chineseModeSelect = document.getElementById('chinese_mode');
-                const resultCountInput = document.getElementById('result_count');
-                const resultsDiv = document.getElementById('results');
-                const textDisplay = document.getElementById('text_display');
-                const numericDisplay = document.getElementById('numeric_display');
-                const primeDisplay = document.getElementById('prime_display');
-                const wordAnalysis = document.getElementById('word_analysis');
-                const combinations = document.getElementById('combinations');
-                const loading = document.getElementById('loading');
-                const errorDiv = document.getElementById('error');
+                const clearBtn = document.getElementById('clear_btn');
+                const resultDiv = document.getElementById('result');
+                const resultPlaceholder = document.getElementById('result_placeholder');
+                const primeResultDiv = document.getElementById('prime_result');
+                const wordAnalysisDiv = document.getElementById('word_analysis');
+                const celebrationDiv = document.getElementById('celebration');
+                const copyPrimeBtn = document.getElementById('copy_prime_btn');
+                const copyAnalysisBtn = document.getElementById('copy_analysis_btn');
+                const exportCsvBtn = document.getElementById('export_csv_btn');
                 
-                // 添加回車鍵搜索功能
-                textInput.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        searchBtn.click();
-                    }
-                });
-                
-                resultCountInput.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter') {
-                        searchBtn.click();
-                    }
-                });
-                
-                searchBtn.addEventListener('click', function() {
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    
                     const text = textInput.value.trim();
-                    const chineseMode = chineseModeSelect.value;
-                    const count = parseInt(resultCountInput.value) || 10;
-                    
-                    // 限制結果數量在 1-512 之間
-                    const limitedCount = Math.max(1, Math.min(512, count));
-                    
                     if (!text) {
-                        showError('請輸入文字');
+                        alert('請輸入文字');
                         return;
                     }
                     
-                    // 重置顯示
-                    resultsDiv.style.display = 'none';
-                    errorDiv.style.display = 'none';
-                    loading.style.display = 'block';
+                    const chineseMode = chineseModeSelect.value;
                     
-                    // 創建 FormData
-                    const formData = new FormData();
-                    formData.append('text', text);
-                    formData.append('chinese_mode', chineseMode);
-                    formData.append('count', limitedCount);
+                    // 顯示加載中
+                    resultDiv.style.display = 'none';
+                    resultPlaceholder.style.display = 'none';
+                    primeResultDiv.innerHTML = '<p>計算中...</p>';
                     
                     // 發送請求
-                    fetch('/search', {
+                    fetch('/analyze', {
                         method: 'POST',
-                        body: formData
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: text,
+                            chinese_mode: chineseMode
+                        })
                     })
-                    .then(response => {
-                        if (!response.ok) {
-                            return response.json().then(data => {
-                                throw new Error(data.error || '請求失敗');
+                    .then(response => response.json())
+                    .then(data => {
+                        // 顯示結果
+                        resultDiv.style.display = 'block';
+                        resultPlaceholder.style.display = 'none';
+                        
+                        // 顯示計算結果
+                        let primeResultHtml = '';
+                        if (data.numeric_values) {
+                            primeResultHtml += `<p>原始文字：<strong>${data.original_text}</strong></p>`;
+                            primeResultHtml += `<p>數值表示：<strong>${data.numeric_values.join(' ')}</strong></p>`;
+                        }
+                        primeResultDiv.innerHTML = primeResultHtml;
+                        
+                        // 顯示單詞分析
+                        let wordAnalysisHtml = '';
+                        let hasPrime = false;
+                        
+                        if (data.word_analysis) {
+                            data.word_analysis.forEach(word => {
+                                const isPrime = word.is_prime;
+                                if (isPrime) hasPrime = true;
+                                
+                                wordAnalysisHtml += `<div class="word-info ${isPrime ? 'is-prime' : ''}">`;
+                                wordAnalysisHtml += `<h4>${word.word} (${word.numeric_value})</h4>`;
+                                
+                                if (isPrime) {
+                                    wordAnalysisHtml += `<p class="prime-item">🎉 這是一個質數！</p>`;
+                                } else if (word.closest_prime) {
+                                    wordAnalysisHtml += `<p class="prime-item">${word.closest_prime} (距離：${word.distance})</p>`;
+                                }
+                                
+                                wordAnalysisHtml += '</div>';
                             });
                         }
-                        return response.json();
-                    })
-                    .then(data => {
-                        loading.style.display = 'none';
-                        displayResults(data);
+                        
+                        wordAnalysisDiv.innerHTML = wordAnalysisHtml;
+                        
+                        // 如果有質數，顯示慶祝訊息
+                        celebrationDiv.style.display = hasPrime ? 'block' : 'none';
+                        
+                        // 滾動到結果區域
+                        resultDiv.scrollIntoView({ behavior: 'smooth' });
                     })
                     .catch(error => {
-                        loading.style.display = 'none';
-                        showError(error.message);
+                        console.error('Error:', error);
+                        primeResultDiv.innerHTML = '<p class="error">發生錯誤，請稍後再試</p>';
+                        resultDiv.style.display = 'block';
+                        resultPlaceholder.style.display = 'none';
                     });
                 });
                 
-                function displayResults(data) {
-                    // 顯示原始文字
-                    textDisplay.textContent = `原始文字：${data.original_text}`;
-                    
-                    // 顯示數值表示
-                    numericDisplay.textContent = data.numeric_representation;
-                    
-                    // 顯示質數替換
-                    primeDisplay.innerHTML = '';
-                    let primeText = '<p>';
-                    
-                    data.prime_replacements.forEach(word => {
-                        if (word.is_prime) {
-                            primeText += `<span>${word.original}</span> `;
-                        } else if (word.replacements && word.replacements.length > 0) {
-                            const replacement = word.replacements[0];
-                            primeText += `<span class="prime-text">${replacement.text}</span><span class="distance-indicator">${replacement.direction}${replacement.distance}</span> `;
-                        } else {
-                            primeText += `<span>${word.original}</span> `;
+                // 清除按鈕
+                clearBtn.addEventListener('click', function() {
+                    textInput.value = '';
+                    resultDiv.style.display = 'none';
+                    resultPlaceholder.style.display = 'block';
+                    textInput.focus();
+                });
+                
+                // 複製到剪貼簿函數
+                function copyToClipboard(text) {
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(text)
+                            .catch(err => {
+                                console.error('無法複製: ', err);
+                            });
+                    } else {
+                        const textarea = document.createElement('textarea');
+                        textarea.value = text;
+                        textarea.style.position = 'fixed';
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        try {
+                            document.execCommand('copy');
+                        } catch (err) {
+                            console.error('無法複製: ', err);
                         }
-                    });
-                    
-                    primeText += '</p>';
-                    primeDisplay.innerHTML = primeText;
-                    
-                    // 顯示單詞分析
-                    wordAnalysis.innerHTML = '';
-                    data.prime_replacements.forEach((word, index) => {
-                        const wordDiv = document.createElement('div');
-                        wordDiv.className = word.is_prime ? 'word-info is-prime' : 'word-info not-prime';
-                        
-                        let wordContent = `<h4>${word.original} (${word.numeric})</h4>`;
-                        if (word.is_prime) {
-                            wordContent += `<p><strong>這是一個質數！</strong></p>`;
-                        } else {
-                            wordContent += `<p>這不是質數</p>`;
-                            
-                            if (word.replacements && word.replacements.length > 0) {
-                                wordContent += `<div class="prime-list"><h5>最接近的質數：</h5>`;
-                                
-                                word.replacements.forEach(replacement => {
-                                    wordContent += `
-                                        <div class="prime-item">
-                                            <span>${replacement.text} ${replacement.prime}</span>
-                                            <span>距離：${replacement.distance} ${replacement.direction}</span>
-                                        </div>
-                                    `;
-                                });
-                                
-                                wordContent += `</div>`;
-                            }
-                        }
-                        
-                        wordDiv.innerHTML = wordContent;
-                        wordAnalysis.appendChild(wordDiv);
-                    });
-                    
-                    // 顯示隨機組合
-                    combinations.innerHTML = '';
-                    data.combinations.forEach((combo, index) => {
-                        const comboDiv = document.createElement('div');
-                        comboDiv.className = 'combination';
-                        
-                        let comboText = `<h4>組合 ${index + 1}</h4><p>`;
-                        
-                        combo.forEach(item => {
-                            if (item.is_original) {
-                                comboText += `<span>${item.original}</span> `;
-                            } else {
-                                comboText += `<span class="prime-text">${item.replacement}</span><span class="distance-indicator">${item.direction}${item.distance}</span> `;
-                            }
-                        });
-                        
-                        comboText += `</p>`;
-                        comboDiv.innerHTML = comboText;
-                        combinations.appendChild(comboDiv);
-                    });
-                    
-                    // 顯示結果區域
-                    resultsDiv.style.display = 'block';
+                        document.body.removeChild(textarea);
+                    }
                 }
                 
-                function showError(message) {
-                    errorDiv.textContent = message;
-                    errorDiv.style.display = 'block';
+                // 顯示複製成功訊息
+                function showCopyMessage(button) {
+                    const message = button.nextElementSibling;
+                    if (message && message.classList.contains('copy-message')) {
+                        message.style.display = 'inline';
+                        message.style.opacity = '1';
+                        setTimeout(() => {
+                            message.style.opacity = '0';
+                            setTimeout(() => {
+                                message.style.display = 'none';
+                            }, 1000);
+                        }, 1000);
+                    }
                 }
+                
+                // 複製數值按鈕
+                copyPrimeBtn.addEventListener('click', function() {
+                    const textOnly = primeResultDiv.textContent.replace(/\\s+/g, ' ').trim();
+                    copyToClipboard(textOnly);
+                    showCopyMessage(this);
+                });
+                
+                // 複製分析結果按鈕
+                copyAnalysisBtn.addEventListener('click', function() {
+                    let analysisText = '';
+                    document.querySelectorAll('#word_analysis .word-info').forEach(wordDiv => {
+                        analysisText += wordDiv.textContent.replace(/\\s+/g, ' ').trim() + '\\n\\n';
+                    });
+                    copyToClipboard(analysisText);
+                    showCopyMessage(this);
+                });
+                
+                // 導出為CSV按鈕
+                exportCsvBtn.addEventListener('click', function() {
+                    let csvContent = '原始文字,數值,是否質數,最接近質數,距離\\n';
+                    
+                    document.querySelectorAll('#word_analysis .word-info').forEach(wordDiv => {
+                        const title = wordDiv.querySelector('h4').textContent;
+                        const isPrime = wordDiv.classList.contains('is-prime');
+                        const original = title.split(' ')[0];
+                        const numeric = title.match(/\\((\\d+)\\)/)[1];
+                        
+                        let closestPrime = '';
+                        let distance = '';
+                        
+                        if (!isPrime && wordDiv.querySelector('.prime-item')) {
+                            const primeInfo = wordDiv.querySelector('.prime-item').textContent.trim();
+                            closestPrime = primeInfo.split(' ')[0];
+                            distance = primeInfo.match(/距離：(\\d+)/)[1];
+                        }
+                        
+                        csvContent += `"${original}","${numeric}","${isPrime ? '是' : '否'}","${closestPrime}","${distance}"\\n`;
+                    });
+                    
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', '文字質數分析.csv');
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    showCopyMessage(this);
+                });
             });
         </script>
     </body>
     </html>
-    '''
+    """
 
 # 使用 with app.app_context() 預加載 PrimesDB 數據
 with app.app_context():
